@@ -95,7 +95,10 @@ const btnSettings = document.getElementById('btn-settings');
 const btnPdfPreview = document.getElementById('btn-pdf-preview');
 
 // エディタコンテナ
-const editorContainer = document.getElementById('editor');
+// const editorContainer = document.getElementById('editor'); // ← これは削除またはコメントアウト
+const paneRoot = document.getElementById('pane-root'); // ← これが必須
+const dropOverlay = document.getElementById('drop-overlay');
+const dropIndicator = document.getElementById('drop-indicator');
 
 // ターミナルコンテナ
 const terminalContainer = document.getElementById('terminal-container');
@@ -151,7 +154,7 @@ const btnAuthGDrive = document.getElementById('btn-auth-gdrive');
 const syncStatusText = document.getElementById('sync-status-text');
 
 // ========== 状態管理 ==========
-let globalEditorView = null; // CodeMirrorインスタンス
+// let globalEditorView = null; // CodeMirrorインスタンス
 let isPositionRight = true;
 let isTerminalVisible = false;
 let isRightActivityBarVisible = true;
@@ -1750,6 +1753,610 @@ const dropHandler = EditorView.domEventHandlers({
     }
 });
 
+// ...existing code...
+// ★ここに追加: createEditorState関数の定義 (ReferenceError回避)
+function createEditorState(content, filePath) {
+    const initialTheme = appSettings.theme === 'dark' ? oneDark : [];
+    const initialStyle = EditorView.theme({
+        ".cm-content": {
+            fontSize: appSettings.fontSize,
+            fontFamily: appSettings.fontFamily
+        },
+        ".cm-gutters": {
+            fontSize: appSettings.fontSize,
+            fontFamily: appSettings.fontFamily
+        },
+        "&": { height: "100%" },
+        ".cm-scroller": { fontFamily: 'inherit' }
+    });
+    const indentString = appSettings.insertSpaces ? " ".repeat(appSettings.tabSize) : "\t";
+
+    // 言語拡張の取得（デフォルトはMarkdown）
+    const langExtensions = (typeof getLanguageExtensions === 'function') 
+        ? getLanguageExtensions(filePath) 
+        : [markdown()];
+
+    return EditorState.create({
+        doc: content,
+        extensions: [
+            themeCompartment.of(initialTheme),
+            editorStyleCompartment.of(initialStyle),
+            indentUnitCompartment.of(indentUnit.of(indentString)),
+            tabSizeCompartment.of(EditorState.tabSize.of(appSettings.tabSize)),
+            lineWrappingCompartment.of(appSettings.wordWrap ? EditorView.lineWrapping : []),
+            
+            Prec.highest(keymap.of(obsidianLikeListKeymap)),
+            
+            pasteHandler,
+            dropHandler,
+            history(),
+            search(),
+            drawSelection(),
+            dropCursor(),
+
+            keymap.of([
+                ...defaultKeymap,
+                ...historyKeymap,
+                ...searchKeymap,
+                { key: "Mod-s", run: () => { saveCurrentFile(false); return true; } }
+            ]),
+
+            syntaxHighlighting(defaultHighlightStyle),
+            languageCompartment.of(langExtensions),
+            
+            activeLineCompartment.of(appSettings.highlightActiveLine ? highlightActiveLine() : []),
+            autoCloseBracketsCompartment.of(appSettings.autoCloseBrackets ? closeBrackets() : []),
+            lineNumbersCompartment.of(appSettings.showLineNumbers ? lineNumbers() : []),
+            
+            livePreviewPlugin,
+            tablePlugin,
+
+            EditorView.updateListener.of(update => {
+                if (update.docChanged) {
+                    const isExternal = update.transactions.some(tr => tr.annotation(ExternalChange));
+                    onEditorInput(!isExternal);
+                }
+            })
+        ],
+    });
+}
+
+// ★ここに追加: PaneクラスとLayoutManagerクラス
+
+// ========== Pane Class (タブ分割の核) ==========
+class Pane {
+    constructor(id, parentContainer) {
+        this.id = id;
+        this.files = []; 
+        this.activeFilePath = null;
+        this.editorView = null;
+        
+        // DOM Elements
+        this.element = document.createElement('div');
+        this.element.className = 'pane';
+        this.element.dataset.id = id;
+        this.element.style.flex = '1';
+
+        this.element.addEventListener('mousedown', () => {
+            if (typeof layoutManager !== 'undefined') {
+                layoutManager.setActivePane(this.id);
+            }
+        });
+
+        this.header = document.createElement('div');
+        this.header.className = 'pane-header';
+        
+        this.tabsContainer = document.createElement('div');
+        this.tabsContainer.className = 'pane-tabs-container';
+        
+        // ツールバーを格納するエリア
+        this.controlsArea = document.createElement('div');
+        this.controlsArea.className = 'pane-controls-area';
+
+        this.body = document.createElement('div');
+        this.body.className = 'pane-body';
+
+        this.header.appendChild(this.tabsContainer);
+        
+        this.element.appendChild(this.header);
+        this.element.appendChild(this.controlsArea);
+        this.element.appendChild(this.body);
+        
+        parentContainer.appendChild(this.element);
+
+        this.initEditor();
+    }
+
+    initEditor() {
+        const initialTheme = appSettings.theme === 'dark' ? oneDark : [];
+        const initialStyle = EditorView.theme({
+            ".cm-content": {
+                fontSize: appSettings.fontSize,
+                fontFamily: appSettings.fontFamily
+            },
+            ".cm-gutters": {
+                fontSize: appSettings.fontSize,
+                fontFamily: appSettings.fontFamily
+            },
+            "&": { height: "100%" },
+            ".cm-scroller": { fontFamily: 'inherit' }
+        });
+        const indentString = appSettings.insertSpaces ? " ".repeat(appSettings.tabSize) : "\t";
+
+        const state = EditorState.create({
+            doc: "",
+            extensions: [
+                themeCompartment.of(initialTheme),
+                editorStyleCompartment.of(initialStyle),
+                indentUnitCompartment.of(indentUnit.of(indentString)),
+                tabSizeCompartment.of(EditorState.tabSize.of(appSettings.tabSize)),
+                lineWrappingCompartment.of(appSettings.wordWrap ? EditorView.lineWrapping : []),
+                
+                // キーマップ (リスト操作等)
+                Prec.highest(keymap.of(obsidianLikeListKeymap)),
+                
+                pasteHandler,
+                dropHandler, // エディタ内ドロップ
+                history(),
+                search(),
+                drawSelection(),
+                dropCursor(),
+
+                keymap.of([
+                    ...defaultKeymap,
+                    ...historyKeymap,
+                    ...searchKeymap,
+                    { key: "Mod-s", run: () => { saveCurrentFile(false); return true; } }
+                ]),
+
+                syntaxHighlighting(defaultHighlightStyle),
+                languageCompartment.of(markdown()), // 初期言語
+                
+                activeLineCompartment.of(appSettings.highlightActiveLine ? highlightActiveLine() : []),
+                autoCloseBracketsCompartment.of(appSettings.autoCloseBrackets ? closeBrackets() : []),
+                lineNumbersCompartment.of(appSettings.showLineNumbers ? lineNumbers() : []),
+                
+                livePreviewPlugin,
+                tablePlugin,
+
+                EditorView.updateListener.of(update => {
+                    if (update.docChanged) {
+                        const isExternal = update.transactions.some(tr => tr.annotation(ExternalChange));
+                        onEditorInput(!isExternal);
+                    }
+                    if (update.focusChanged && update.view.hasFocus) {
+                        if (typeof layoutManager !== 'undefined') {
+                            layoutManager.setActivePane(this.id);
+                        }
+                    }
+                })
+            ],
+        });
+
+        this.editorView = new EditorView({
+            state: state,
+            parent: this.body,
+        });
+    }
+
+    destroy() {
+        if (this.editorView) {
+            this.editorView.destroy();
+            this.editorView = null;
+        }
+        if (this.element && this.element.parentNode) {
+            this.element.parentNode.removeChild(this.element);
+        }
+    }
+
+    updateTabs() {
+        this.tabsContainer.innerHTML = '';
+        this.files.forEach(filePath => {
+            const fileData = openedFiles.get(filePath);
+            const fileName = fileData ? fileData.fileName : path.basename(filePath);
+            const isActive = filePath === this.activeFilePath;
+            const isDirty = fileModificationState.has(filePath);
+
+            const tab = document.createElement('div');
+            tab.className = `editor-tab ${isActive ? 'active' : ''}`;
+            tab.dataset.filepath = filePath;
+            tab.draggable = true;
+            
+            tab.innerHTML = `
+                <span class="tab-title">${fileName} ${isDirty ? '●' : ''}</span>
+                <span class="close-tab">×</span>
+            `;
+
+            tab.addEventListener('click', (e) => {
+                if (e.target.classList.contains('close-tab')) {
+                    e.stopPropagation();
+                    this.closeFile(filePath);
+                } else {
+                    this.switchToFile(filePath);
+                }
+            });
+
+            // Drag Start
+            tab.addEventListener('dragstart', (e) => {
+                e.dataTransfer.setData('text/plain', JSON.stringify({
+                    paneId: this.id,
+                    filePath: filePath
+                }));
+                tab.classList.add('dragging');
+                if (typeof layoutManager !== 'undefined') {
+                    layoutManager.setDragSource(this.id, filePath);
+                }
+            });
+
+            tab.addEventListener('dragend', (e) => {
+                tab.classList.remove('dragging');
+                if (typeof layoutManager !== 'undefined') {
+                    layoutManager.clearDragSource();
+                    layoutManager.hideDropOverlay();
+                }
+            });
+
+            this.tabsContainer.appendChild(tab);
+        });
+    }
+
+    openFile(filePath) {
+        if (!this.files.includes(filePath)) {
+            this.files.push(filePath);
+        }
+        this.switchToFile(filePath);
+        this.updateTabs();
+    }
+
+    closeFile(filePath, isMoving = false) {
+        const index = this.files.indexOf(filePath);
+        if (index > -1) {
+            this.files.splice(index, 1);
+            if (this.activeFilePath === filePath) {
+                const nextFile = this.files[index] || this.files[index - 1];
+                if (nextFile) {
+                    this.switchToFile(nextFile);
+                } else {
+                    this.activeFilePath = null;
+                    this.setEditorContent("");
+                    // ファイルがない場合はタイトルバーをクリア
+                    if (fileTitleInput) fileTitleInput.value = "";
+                }
+            }
+            this.updateTabs();
+        }
+
+        if (!isMoving) {
+            let isOpenedElsewhere = false;
+            if (typeof layoutManager !== 'undefined') {
+                layoutManager.panes.forEach(pane => {
+                    if (pane.files.includes(filePath)) isOpenedElsewhere = true;
+                });
+            }
+
+            if (!isOpenedElsewhere) {
+                openedFiles.delete(filePath);
+                fileModificationState.delete(filePath);
+            }
+        }
+
+        // ファイルが空になったらペイン自体を削除する（ただし最後の1つを除く）
+        if (this.files.length === 0) {
+            if (typeof layoutManager !== 'undefined') {
+                layoutManager.removePane(this.id);
+            }
+        }
+    }
+
+    switchToFile(filePath) {
+        this.activeFilePath = filePath;
+        const fileData = openedFiles.get(filePath);
+        const content = fileData ? fileData.content : "";
+        
+        // 言語設定の更新
+        if (this.editorView && typeof getLanguageExtensions === 'function') {
+             this.editorView.dispatch({
+                 effects: languageCompartment.reconfigure(getLanguageExtensions(filePath))
+             });
+        }
+        
+        this.setEditorContent(content);
+        this.updateTabs();
+        
+        // タイトルバー更新
+        if (fileTitleInput && fileData) {
+             const fileName = fileData.fileName;
+             const extIndex = fileName.lastIndexOf('.');
+             fileTitleInput.value = extIndex > 0 ? fileName.substring(0, extIndex) : fileName;
+        }
+        
+        updateFileStats();
+        updateOutline();
+        if (isPdfPreviewVisible) generatePdfPreview();
+
+        if (fileData) {
+            document.title = `${fileData.fileName} - Markdown IDE`;
+        }
+    }
+
+    setEditorContent(content) {
+        if (!this.editorView) return;
+        this.editorView.dispatch({
+            changes: { from: 0, to: this.editorView.state.doc.length, insert: content },
+            annotations: ExternalChange.of(true)
+        });
+    }
+}
+
+// ========== Layout Manager Class ==========
+class LayoutManager {
+    constructor() {
+        this.panes = new Map();
+        this.activePaneId = null;
+        this.paneCounter = 0;
+        this.rootContainer = document.getElementById('pane-root'); // HTML側に id="pane-root" が必要です
+        this.dragSource = null;
+    }
+
+    init() {
+        if (!this.rootContainer) {
+            // pane-rootがない場合、editorContainerを代用またはラップする処理が必要ですが
+            // ここでは既存のeditorContainerをpane-rootとして扱うか、HTML構造の変更を前提とします
+            // 簡易的にeditorContainerを使用
+            this.rootContainer = document.getElementById('editor');
+            this.rootContainer.id = 'pane-root'; // ID書き換え
+            this.rootContainer.innerHTML = ''; // クリア
+        } else {
+            this.rootContainer.innerHTML = '';
+        }
+        
+        this.panes.clear();
+        const initialPaneId = this.createPane(this.rootContainer);
+        this.setActivePane(initialPaneId);
+        this.setupDragDrop();
+    }
+
+    createPane(container) {
+        const id = `pane-${++this.paneCounter}`;
+        const pane = new Pane(id, container);
+        this.panes.set(id, pane);
+        return id;
+    }
+
+    removePane(paneId) {
+        const pane = this.panes.get(paneId);
+        if (!pane) return;
+
+        // 最後の1つは削除しない
+        if (pane.element.parentNode === this.rootContainer) {
+            if (pane.files.length === 0) pane.setEditorContent("");
+            return;
+        }
+
+        const parentSplit = pane.element.parentNode; // .split-container
+        const grandParent = parentSplit.parentNode;  // .split-container or #pane-root
+
+        // 兄弟要素を探す
+        const sibling = Array.from(parentSplit.children).find(el => el !== pane.element);
+        if (!sibling) return;
+
+        // 兄弟要素を昇格させる（スタイルリセット）
+        sibling.style.width = '';
+        sibling.style.height = '';
+        sibling.style.flex = '1';
+        sibling.style.flexBasis = '';
+        sibling.style.flexGrow = '';
+        sibling.style.flexShrink = '';
+
+        grandParent.replaceChild(sibling, parentSplit);
+        pane.destroy();
+        this.panes.delete(paneId);
+
+        // アクティブペインの再計算
+        if (this.activePaneId === paneId) {
+            // 昇格した兄弟の中にペインがあればそれをアクティブに
+            const firstPane = sibling.querySelector('.pane') || (sibling.classList.contains('pane') ? sibling : null);
+            if (firstPane) this.setActivePane(firstPane.dataset.id);
+        }
+    }
+
+    setActivePane(id) {
+        if (this.activePaneId) {
+            const prev = this.panes.get(this.activePaneId);
+            if (prev && prev.element) prev.element.classList.remove('active');
+        }
+        this.activePaneId = id;
+        const next = this.panes.get(id);
+        if (next) {
+            next.element.classList.add('active');
+
+            // ツールバーとタイトルバーをアクティブなペインへ移動
+            const toolbar = document.querySelector('.toolbar');
+            const titleBar = document.getElementById('file-title-bar');
+            
+            if (next.controlsArea) {
+                // タイトルバーがあれば移動
+                if (titleBar && titleBar.parentElement !== next.controlsArea) {
+                    next.controlsArea.appendChild(titleBar);
+                }
+                // ツールバーがあれば移動
+                if (toolbar && toolbar.parentElement !== next.controlsArea) {
+                    next.controlsArea.appendChild(toolbar);
+                    // ツールバーのオーバーフロー計算再実行
+                    requestAnimationFrame(() => {
+                        if (typeof handleToolbarResize === 'function') handleToolbarResize();
+                    });
+                }
+            }
+
+            // UI更新
+            if(next.activeFilePath) {
+                const fileData = openedFiles.get(next.activeFilePath);
+                if (fileTitleInput && fileData) {
+                     const fileName = fileData.fileName;
+                     const extIndex = fileName.lastIndexOf('.');
+                     fileTitleInput.value = extIndex > 0 ? fileName.substring(0, extIndex) : fileName;
+                }
+                // PDFプレビューの同期
+                if (isPdfPreviewVisible) generatePdfPreview();
+            } else {
+                if(fileTitleInput) fileTitleInput.value = "";
+            }
+            updateFileStats();
+            updateOutline();
+        }
+    }
+
+    get activePane() {
+        return this.panes.get(this.activePaneId);
+    }
+
+    setDragSource(paneId, filePath) {
+        this.dragSource = { paneId, filePath };
+    }
+
+    clearDragSource() {
+        this.dragSource = null;
+    }
+
+    splitPane(targetPaneId, direction) {
+        const targetPane = this.panes.get(targetPaneId);
+        if (!targetPane) return null;
+
+        const parent = targetPane.element.parentNode;
+        const splitContainer = document.createElement('div');
+        splitContainer.className = `split-container ${['left','right'].includes(direction) ? 'horizontal' : 'vertical'}`;
+        splitContainer.style.flex = '1';
+        
+        parent.replaceChild(splitContainer, targetPane.element);
+        
+        const newPaneId = this.createPane(splitContainer);
+        const newPane = this.panes.get(newPaneId);
+
+        targetPane.element.style.flex = '1';
+        targetPane.element.style.width = '';
+        targetPane.element.style.height = '';
+        newPane.element.style.flex = '1';
+        newPane.element.style.width = '';
+        newPane.element.style.height = '';
+
+        if (direction === 'left' || direction === 'top') {
+            splitContainer.appendChild(newPane.element);
+            splitContainer.appendChild(targetPane.element);
+        } else {
+            splitContainer.appendChild(targetPane.element);
+            splitContainer.appendChild(newPane.element);
+        }
+
+        return newPaneId;
+    }
+
+    setupDragDrop() {
+        const container = this.rootContainer;
+        
+        container.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            if (!this.dragSource) return;
+
+            // ドロップ先のペイン要素を特定
+            let targetEl = e.target;
+            while(targetEl && !targetEl.classList.contains('pane')) {
+                targetEl = targetEl.parentElement;
+                if(!targetEl || targetEl === container) break;
+            }
+            
+            if (!targetEl || !targetEl.classList.contains('pane')) return;
+
+            const rect = targetEl.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            // 上下左右20%を分割ゾーンとする
+            const threshold = 0.2;
+            let zone = 'center';
+            if (x < rect.width * threshold) zone = 'left';
+            else if (x > rect.width * (1 - threshold)) zone = 'right';
+            else if (y < rect.height * threshold) zone = 'top';
+            else if (y > rect.height * (1 - threshold)) zone = 'bottom';
+
+            this.showDropOverlay(zone, rect);
+            this.currentDropZone = zone;
+            this.dropTargetPaneId = targetEl.dataset.id;
+            
+            e.dataTransfer.dropEffect = 'move';
+        });
+
+        container.addEventListener('dragleave', (e) => {
+            if (e.target === dropOverlay) this.hideDropOverlay();
+        });
+
+        container.addEventListener('drop', (e) => {
+            e.preventDefault();
+            this.hideDropOverlay();
+            if (!this.dragSource || !this.dropTargetPaneId) return;
+
+            const targetPaneId = this.dropTargetPaneId;
+            const zone = this.currentDropZone;
+
+            if (zone === 'center' && targetPaneId === this.dragSource.paneId) return;
+
+            if (zone === 'center') {
+                // タブ移動
+                const targetPane = this.panes.get(targetPaneId);
+                const sourcePane = this.panes.get(this.dragSource.paneId);
+                
+                targetPane.openFile(this.dragSource.filePath);
+                sourcePane.closeFile(this.dragSource.filePath, true);
+                this.setActivePane(targetPaneId);
+            } else {
+                // 分割
+                const newPaneId = this.splitPane(targetPaneId, zone);
+                if (newPaneId) {
+                    const newPane = this.panes.get(newPaneId);
+                    const sourcePane = this.panes.get(this.dragSource.paneId);
+                    
+                    newPane.openFile(this.dragSource.filePath);
+                    sourcePane.closeFile(this.dragSource.filePath, true);
+                    this.setActivePane(newPaneId);
+                }
+            }
+        });
+    }
+
+    showDropOverlay(zone, rect) {
+        if (!dropOverlay || !dropIndicator) return;
+        dropOverlay.classList.remove('hidden');
+        
+        const style = { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
+
+        switch(zone) {
+            case 'left': style.width *= 0.5; break;
+            case 'right': style.left += style.width * 0.5; style.width *= 0.5; break;
+            case 'top': style.height *= 0.5; break;
+            case 'bottom': style.top += style.height * 0.5; style.height *= 0.5; break;
+            case 'center': break;
+        }
+
+        dropIndicator.style.top = style.top + 'px';
+        dropIndicator.style.left = style.left + 'px';
+        dropIndicator.style.width = style.width + 'px';
+        dropIndicator.style.height = style.height + 'px';
+    }
+
+    hideDropOverlay() {
+        if (dropOverlay) dropOverlay.classList.add('hidden');
+        this.currentDropZone = null;
+        this.dropTargetPaneId = null;
+    }
+}
+
+const layoutManager = new LayoutManager();
+
+// グローバルアクセスのためのプロキシ
+Object.defineProperty(window, 'globalEditorView', {
+    get: () => layoutManager.activePane ? layoutManager.activePane.editorView : null
+});
+
 // ========== 検索ウィジェット管理 ==========
 let searchState = {
     query: "",
@@ -2041,61 +2648,6 @@ function getCombinedKeymap() {
     ];
 }
 
-function createEditorState(content, filePath) {
-    const initialTheme = appSettings.theme === 'dark' ? oneDark : [];
-    const initialStyle = EditorView.theme({
-        ".cm-content": {
-            fontSize: appSettings.fontSize,
-            fontFamily: appSettings.fontFamily
-        },
-        ".cm-gutters": {
-            fontSize: appSettings.fontSize,
-            fontFamily: appSettings.fontFamily
-        },
-        "&": { height: "100%" },
-        ".cm-scroller": { fontFamily: 'inherit' }
-    });
-    const indentString = appSettings.insertSpaces ? " ".repeat(appSettings.tabSize) : "\t";
-
-    return EditorState.create({
-        doc: content,
-        extensions: [
-            EditorState.phrases.of({ "Find": "検索...", }),
-            themeCompartment.of(initialTheme),
-            editorStyleCompartment.of(initialStyle),
-            indentUnitCompartment.of(indentUnit.of(indentString)),
-            tabSizeCompartment.of(EditorState.tabSize.of(appSettings.tabSize)),
-            lineWrappingCompartment.of(appSettings.wordWrap ? EditorView.lineWrapping : []),
-
-            // コンパートメントを使って動的キーマップを適用
-            // これにより、後から reconfigure でキー設定だけを即座に入れ替え可能になります
-            keybindingsCompartment.of(Prec.highest(keymap.of(getCombinedKeymap()))),
-
-            pasteHandler,
-            dropHandler,
-            history(),
-            search(),
-            drawSelection(),
-            dropCursor(),
-
-            // デフォルトキーマップ (優先度低)
-            keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
-
-            syntaxHighlighting(defaultHighlightStyle),
-            languageCompartment.of(getLanguageExtensions(filePath)),
-            activeLineCompartment.of(appSettings.highlightActiveLine ? highlightActiveLine() : []),
-            autoCloseBracketsCompartment.of(appSettings.autoCloseBrackets ? closeBrackets() : []),
-            lineNumbersCompartment.of(appSettings.showLineNumbers ? lineNumbers() : []),
-
-            EditorView.updateListener.of(update => {
-                if (update.docChanged) {
-                    const isExternal = update.transactions.some(tr => tr.annotation(ExternalChange));
-                    onEditorInput(!isExternal);
-                }
-            })
-        ]
-    });
-}
 
 // ========== Hotkey UI Logic ==========
 
@@ -2428,21 +2980,6 @@ function setupHotkeySearch() {
             renderHotkeysList();
         });
     }
-}
-
-function initEditor() {
-    if (globalEditorView) return;
-
-    // 初期状態（README相当）でステートを作成
-    const state = createEditorState(startDoc, 'default.md');
-
-    globalEditorView = new EditorView({
-        state: state,
-        parent: editorContainer,
-    });
-
-    // カスタム検索ウィジェットのセットアップ
-    searchWidgetControl = setupSearchWidget(globalEditorView);
 }
 
 // ========== エディタ操作ヘルパー ==========
@@ -5999,158 +6536,62 @@ function setupAccountButton() {
     });
 }
 
+// ...existing code...
+// ========== Initialization ==========
+
 window.addEventListener('load', async () => {
+    console.log('[App] Window Loaded');
     console.log('Markdown IDE loaded');
 
+    // Layout Manager 初期化
+    if (typeof layoutManager !== 'undefined') {
+        layoutManager.init();
+    }
+
     await loadSettings();
-    await loadRecentFiles();
+    await loadRecentFiles(); // Recent Files読み込み
     setupSettingsListeners();
     setupSyncSettings();
-    setupSettingsNavigation(); // 設定画面のナビゲーション初期化
 
-    setupSnippetEvents();
-    renderCssSnippetsList();
-
-    setupHotkeySearch();
-
-    // 設定画面のメニューがクリックされたらリストを描画
-    const hotkeyNav = document.querySelector('.settings-nav-item[data-section="hotkeys"]');
-    if (hotkeyNav) {
-        hotkeyNav.addEventListener('click', () => {
-            renderHotkeysList();
-        });
-    }
-
-    // 状態監視リスナー
-    if (window.electronAPI && window.electronAPI.onSyncStatusChange) {
-        window.electronAPI.onSyncStatusChange((status) => {
-            if (status === 'syncing') {
-                if (btnCloudSync) btnCloudSync.classList.add('syncing');
-                if (syncStatusText) syncStatusText.textContent = '同期中...';
-            } else if (status === 'idle') {
-                if (btnCloudSync) btnCloudSync.classList.remove('syncing');
-                if (syncStatusText) syncStatusText.textContent = '';
-            } else if (status === 'error') {
-                if (btnCloudSync) btnCloudSync.classList.remove('syncing');
-                if (syncStatusText) syncStatusText.textContent = 'エラー';
-                setTimeout(() => { if (syncStatusText) syncStatusText.textContent = ''; }, 3000);
-            }
-        });
-    }
-
-    initEditor();
+    // 初期表示
     showWelcomeReadme();
+    
+    // ファイルツリー・イベント
     initializeFileTree();
     setupFileExplorerEvents();
-    updateOutline();
     updateLeftPaneWidthVariable();
     initToolbarOverflow();
+    
+    // アカウントボタンなど
+    setupAccountButton();
+    setupGitExtraButtons();
 
-    // カレンダー機能の初期化
-    if (window.calendarAPI) {
-        window.calendarAPI.init();
-    }
-
+    // ターミナル
     if (isTerminalVisible) {
         initializeTerminal();
     }
     updateTerminalVisibility();
-
-    if (document.querySelector('.side-switch.active')) {
-        switchHeaderButtons(document.querySelector('.side-switch.active').dataset.target);
+    
+    // 起動時のGitステータス更新
+    updateStatusBarGitInfo();
+    if (document.getElementById('content-git') && !document.getElementById('content-git').classList.contains('content-hidden')) {
+        refreshGitStatus();
     }
 
-    // アプリ起動時にステータスバーのGit情報を更新
-    updateStatusBarGitInfo();
-
+    // ファイルシステム監視
     if (typeof window.electronAPI?.onFileSystemChanged === 'function') {
         window.electronAPI.onFileSystemChanged((payload) => {
             console.log('File system change detected:', payload);
             if (window.fileTreeUpdateTimeout) clearTimeout(window.fileTreeUpdateTimeout);
             window.fileTreeUpdateTimeout = setTimeout(() => {
                 initializeFileTreeWithState();
-
-                // Gitパネルが表示されている場合はGitステータスも更新
-                // const gitContent = document.getElementById('content-git');
-                // if (gitContent && !gitContent.classList.contains('content-hidden')) {
-                //     if (typeof refreshGitStatus === 'function') refreshGitStatus();
-                // }
-                if (typeof refreshGitStatus === 'function') {
-                    refreshGitStatus();
+                // Gitパネルが開いていれば更新
+                if (!document.getElementById('content-git').classList.contains('content-hidden')) {
+                     refreshGitStatus();
                 }
             }, 500);
         });
     }
-
-    // エディタのコンテキストメニューリスナー設定
-    if (editorContainer) {
-        editorContainer.addEventListener('contextmenu', (e) => {
-            if (!globalEditorView) return;
-            e.preventDefault();
-            window.electronAPI.showEditorContextMenu();
-        });
-    }
-
-    // プラスボタンのイベントリスナー
-    const btnNewTab = document.getElementById('btn-new-tab');
-    if (btnNewTab) {
-        btnNewTab.addEventListener('click', () => {
-            createNewTab();
-        });
-    }
-
-    // Gitセクションの開閉（アコーディオン）機能
-    const setupGitToggle = (headerId, listId) => {
-        const header = document.getElementById(headerId);
-        const list = document.getElementById(listId);
-
-        if (header && list) {
-            header.addEventListener('click', () => {
-                const isHidden = list.style.display === 'none';
-
-                if (isHidden) {
-                    // 開く
-                    list.style.display = 'block';
-                    header.classList.remove('collapsed');
-                } else {
-                    // 閉じる
-                    list.style.display = 'none';
-                    header.classList.add('collapsed');
-                }
-            });
-        }
-    };
-
-    setupGitToggle('header-unstaged', 'git-unstaged');
-    setupGitToggle('header-staged', 'git-staged');
-
-    // ブランチ切り替え機能の初期化
-    setupGitBranchSwitching();
-    // .gitignoreボタンのセットアップ
-    setupGitExtraButtons();
-    // アカウントボタンのセットアップ
-    setupAccountButton();
-
-    // メインプロセスからのコンテキストメニューコマンド受信
-    window.electronAPI.onEditorContextMenuCommand((command) => {
-        if (!globalEditorView) return;
-
-        if (typeof command === 'string') {
-            switch (command) {
-                case 'bold':
-                    toggleMark(globalEditorView, '**');
-                    break;
-                case 'insert-table':
-                    insertTable(globalEditorView);
-                    break;
-                case 'code-block':
-                    insertCodeBlock(globalEditorView);
-                    break;
-            }
-        } else if (typeof command === 'object' && command.action === 'highlight') {
-            toggleHighlightColor(globalEditorView, command.color);
-        }
-    });
 });
 
 // ブランチ切り替え機能のセットアップ (サイドバー & ステータスバー)
@@ -6418,32 +6859,18 @@ async function renderMediaContent(filePath, type) {
     }
 }
 
+// ...existing code...
+// ========== Common Logic with Git/Sync ==========
+
+// ファイルを開く（LayoutManager対応版）
 async function openFile(filePath, fileName) {
-    // パスを正規化して統一
     const normalizedPath = path.resolve(filePath);
-
-    // 履歴に追加
-    addToRecentFiles(normalizedPath);
-
     try {
-        if (openedFiles.has('README.md')) {
-            closeWelcomeReadme();
-        }
-
-        // 既に開いているかチェック
-        let tab = document.querySelector(`[data-filepath="${CSS.escape(normalizedPath)}"]`);
-
-        if (tab) {
-            switchToFile(normalizedPath);
-            return;
-        }
-
-        // ファイルタイプ判定
-        const fileType = getFileType(normalizedPath);
         let fileContent = '';
-
-        // テキストファイルの場合のみ内容を読み込む
-        if (fileType === 'text') {
+        if (openedFiles.has(normalizedPath)) {
+            fileContent = openedFiles.get(normalizedPath).content;
+        } else {
+            // テキストファイル読み込み
             if (typeof window.electronAPI?.loadFile === 'function') {
                 try {
                     fileContent = await window.electronAPI.loadFile(normalizedPath);
@@ -6451,55 +6878,90 @@ async function openFile(filePath, fileName) {
                     console.error('Failed to load file content:', error);
                     fileContent = `ファイルを読み込めません: ${error.message}`;
                 }
-            } else {
-                fileContent = `ファイル: ${fileName}\n(内容は読み込めません)`;
             }
+            openedFiles.set(normalizedPath, { content: fileContent, fileName: fileName });
+        }
+
+        // アクティブなペインで開く
+        if (layoutManager.activePane) {
+            layoutManager.activePane.openFile(normalizedPath);
         } else {
-            // 画像やPDFの場合は内容は空でOK（パスを使って表示するため）
-            fileContent = null;
-        }
+        // ペインが一つもない場合は作成して開く
+        const newPaneId = layoutManager.createPane(layoutManager.rootContainer);
+        layoutManager.setActivePane(newPaneId);
+        layoutManager.activePane.openFile(normalizedPath);
+    }
+        
+        // 履歴に追加 (recent files)
+        addToRecentFiles(normalizedPath);
 
-        if (!tab) {
-            tab = document.createElement('div');
-            tab.className = 'tab';
-            tab.dataset.filepath = normalizedPath;
-            tab.innerHTML = `<span class="tab-filename">${fileName}</span> <span class="close-tab" data-filepath="${normalizedPath}">×</span>`;
-            editorTabsContainer.appendChild(tab);
-
-            // type情報を保存
-            openedFiles.set(normalizedPath, {
-                content: fileContent,
-                fileName: fileName,
-                type: fileType
-            });
-        }
-
-        switchToFile(normalizedPath);
     } catch (error) {
         console.error('Failed to open file:', error);
     }
 }
 
+// ファイル保存（LayoutManager対応版）
+async function saveCurrentFile(isSaveAs = false) {
+    const pane = layoutManager.activePane;
+    if (!pane || !pane.activeFilePath) {
+        console.warn('ファイルが選択されていません');
+        return;
+    }
+    if (pane.activeFilePath === 'README.md') return; // 仮想ファイルは保存しない
+
+    try {
+        const content = pane.editorView.state.doc.toString();
+        
+        if (isSaveAs) {
+            // 名前を付けて保存
+             const result = await window.electronAPI.showSaveDialog({
+                defaultPath: path.basename(pane.activeFilePath)
+            });
+            if (result.canceled || !result.filePath) return;
+            
+            await window.electronAPI.saveFile(result.filePath, content);
+            
+            // タブ情報更新（簡易実装: 古いのは閉じて新しいのを開く）
+            const oldPath = pane.activeFilePath;
+            pane.closeFile(oldPath);
+            openFile(result.filePath, path.basename(result.filePath));
+            
+        } else {
+            // 上書き保存
+            await window.electronAPI.saveFile(pane.activeFilePath, content);
+            const fileData = openedFiles.get(pane.activeFilePath);
+            if (fileData) {
+                fileData.content = content;
+            }
+            fileModificationState.delete(pane.activeFilePath);
+            pane.updateTabs(); // 未保存マーク消去
+            console.log(`✅ ファイルを保存しました: ${pane.activeFilePath}`);
+        }
+    } catch (error) {
+        console.error('Failed to save file:', error);
+        showNotification(`保存エラー: ${error.message}`, 'error');
+    }
+}
+// ...existing code...
+
+// window load イベント内
+// showWelcomeReadme(); の定義を確認・修正
+
 function showWelcomeReadme() {
     const readmePath = 'README.md';
-    if (openedFiles.has(readmePath)) return;
-
-    openedFiles.set(readmePath, {
-        content: startDoc,
+    const welcomeContent = `# Welcome\n\nタブ分割機能へようこそ。`;
+    
+    // 仮想ファイルとしてセット
+    openedFiles.set(readmePath, { 
+        content: welcomeContent, 
         fileName: 'README.md',
-        isVirtual: true
+        isVirtual: true 
     });
 
-    const tab = document.createElement('div');
-    tab.className = 'tab';
-    tab.dataset.filepath = readmePath;
-    tab.innerHTML = `README.md`;
-
-    if (editorTabsContainer) {
-        editorTabsContainer.appendChild(tab);
+    // アクティブなペインで開く
+    if (layoutManager && layoutManager.activePane) {
+        layoutManager.activePane.openFile(readmePath);
     }
-
-    switchToFile(readmePath);
 }
 
 function closeWelcomeReadme() {
@@ -6513,125 +6975,15 @@ function closeWelcomeReadme() {
     }
 }
 
+// renderer.js 内の switchToFile 関数をこれに置き換える
+
 function switchToFile(filePath) {
-    // 古いパスを保存
-    const previouslyActivePath = currentFilePath;
-
-    // ファイル切り替え時に古いファイルの自動保存タイマーをクリア
-    if (autoSaveTimer) {
-        clearTimeout(autoSaveTimer);
-        autoSaveTimer = null;
-    }
-
-    // 1. 現在開いているファイルの状態を保存する (テキストファイルの場合のみ)
-    if (previouslyActivePath && globalEditorView && openedFiles.has(previouslyActivePath)) {
-        const currentFileData = openedFiles.get(previouslyActivePath);
-        // typeが'text'または未定義の場合のみ保存
-        if (!currentFileData.type || currentFileData.type === 'text') {
-            currentFileData.editorState = globalEditorView.state;
-            currentFileData.content = globalEditorView.state.doc.toString();
-        }
-    }
-
-    // 2. 新しいファイル情報取得
-    const fileDataForCheck = openedFiles.get(filePath);
-    const fileTypeForCheck = fileDataForCheck ? (fileDataForCheck.type || 'text') : getFileType(filePath);
-
-    // 既にアクティブなメディアファイルが再度クリックされた場合は、重い処理をスキップ
-    if (filePath === previouslyActivePath && fileTypeForCheck !== 'text') {
-        // メディアファイル（画像/PDF）で、既に表示中の場合は再描画を避けるため処理を終了
-        return;
-    }
-
-    // 3. パスを更新し、処理を継続
-    currentFilePath = filePath;
-    const fileData = openedFiles.get(filePath);
-    const fileType = fileData ? (fileData.type || 'text') : getFileType(filePath);
-
-    // ★修正: 仮想的なREADME.mdかどうかを判定する
-    const isVirtualReadme = fileData && fileData.isVirtual === true;
-
-    // DOM要素取得
-    const editorEl = document.getElementById('editor');
-    const mediaViewEl = document.getElementById('media-view');
-    const toolbar = document.querySelector('.toolbar');
-    const searchWidget = document.getElementById('custom-search-widget');
-    const fileTitleBarEl = document.getElementById('file-title-bar');
-
-    // 親コンテナを表示
-    switchMainView('content-readme');
-
-    // --- ビューの切り替え ---
-    if (fileType === 'text') {
-        // テキストモード
-
-        if (editorEl) editorEl.style.display = 'block';
-        if (mediaViewEl) mediaViewEl.classList.add('hidden');
-
-        // ツールバーは常にテキストモードで表示
-        if (toolbar) toolbar.classList.remove('hidden');
-
-        // 仮想README.mdの場合のみタイトルバーを非表示
-        if (fileTitleBarEl) {
-            if (isVirtualReadme) {
-                fileTitleBarEl.classList.add('hidden');
-            } else {
-                fileTitleBarEl.classList.remove('hidden');
-            }
-        }
-
-        // エディタの状態復元
-        if (globalEditorView) {
-            if (fileData && fileData.editorState) {
-                globalEditorView.setState(fileData.editorState);
-            } else {
-                const fileContent = fileData ? fileData.content : '';
-                const newState = createEditorState(fileContent, filePath);
-                globalEditorView.setState(newState);
-            }
-        }
+    // 古い createEditorState などの呼び出しは削除し、LayoutManagerを使用する
+    if (typeof layoutManager !== 'undefined' && layoutManager.activePane) {
+        layoutManager.activePane.switchToFile(filePath);
     } else {
-        // メディアモード (画像/PDF)
-        if (editorEl) editorEl.style.display = 'none';
-        if (mediaViewEl) mediaViewEl.classList.remove('hidden');
-        if (toolbar) toolbar.classList.add('hidden'); // ツールバー非表示
-        if (searchWidget) searchWidget.classList.add('hidden'); // 検索窓非表示
-
-        // メディアファイルの場合はタイトルバーを隠す
-        if (fileTitleBarEl) fileTitleBarEl.classList.add('hidden');
-
-        // メディア描画
-        renderMediaContent(filePath, fileType);
+        console.error("LayoutManager is not ready.");
     }
-
-    // --- UI更新処理 ---
-    // 仮想README.mdではないテキストファイルの場合のみタイトル入力欄を更新
-    if (fileType === 'text' && !isVirtualReadme && fileTitleInput) {
-        const fileName = fileData ? fileData.fileName : filePath.split(/[\/\\]/).pop();
-        const extIndex = fileName.lastIndexOf('.');
-        const fileNameWithoutExt = extIndex > 0 ? fileName.substring(0, extIndex) : fileName;
-        fileTitleInput.value = fileNameWithoutExt;
-    }
-
-    updateOutline();
-
-    if (isPdfPreviewVisible) {
-        // PDFプレビュー画面（右ペイン）はテキストファイル以外または仮想README.md以外で更新
-        if (fileType === 'text' && !isVirtualReadme) {
-            generatePdfPreview();
-        }
-    }
-
-    if (fileData) {
-        document.title = `${fileData.fileName} - Markdown IDE`;
-        document.body.dataset.activeFileDir = path.dirname(filePath);
-    }
-
-    updateFileStats();
-
-    // switchToFileの最後にonEditorInputを呼び出し、新しいファイルの状態に合わせて自動保存のタイマーを再設定する
-    // onEditorInput 内で自動保存の有効・無効を判定するロジックが走ります
-    onEditorInput(false);
 }
 
 function closeTab(element, isSettings = false) {
