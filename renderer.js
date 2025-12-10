@@ -66,7 +66,8 @@ const { get } = require('http');
 const ExternalChange = Annotation.define();
 
 // ========== DOM要素取得 ==========
-const ideContainer = document.getElementById('ide-container');
+// 【削除】これがあるとエラーになります
+// const editorContainer = document.getElementById('editor');
 const leftPane = document.getElementById('left-pane');
 const rightPane = document.getElementById('right-pane');
 const rightActivityBar = document.querySelector('.right-activity-bar');
@@ -6543,7 +6544,7 @@ window.addEventListener('load', async () => {
     console.log('[App] Window Loaded');
     console.log('Markdown IDE loaded');
 
-    // Layout Manager 初期化
+    // 【重要】Layout Manager 初期化
     if (typeof layoutManager !== 'undefined') {
         layoutManager.init();
     }
@@ -6553,7 +6554,7 @@ window.addEventListener('load', async () => {
     setupSettingsListeners();
     setupSyncSettings();
 
-    // 初期表示
+    // 【修正】showWelcomeReadmeは新しい方式で呼ぶ
     showWelcomeReadme();
     
     // ファイルツリー・イベント
@@ -6949,7 +6950,7 @@ async function saveCurrentFile(isSaveAs = false) {
 
 function showWelcomeReadme() {
     const readmePath = 'README.md';
-    const welcomeContent = `# Welcome\n\nタブ分割機能へようこそ。`;
+    const welcomeContent = `# Welcome\n\nここが新しいエディタエリアです。`;
     
     // 仮想ファイルとしてセット
     openedFiles.set(readmePath, { 
@@ -6958,7 +6959,7 @@ function showWelcomeReadme() {
         isVirtual: true 
     });
 
-    // アクティブなペインで開く
+    // 古い editorContainer への操作は削除し、必ず activePane を使う
     if (layoutManager && layoutManager.activePane) {
         layoutManager.activePane.openFile(readmePath);
     }
