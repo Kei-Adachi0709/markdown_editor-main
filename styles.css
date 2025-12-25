@@ -563,12 +563,6 @@ body[data-theme="dark"] .header-btn:hover {
 }
 
 /* File Tree */
-.file-tree {
-    list-style-type: none;
-    padding: 0;
-    margin: 0;
-}
-
 .tree-item {
     display: flex;
     align-items: center;
@@ -654,35 +648,8 @@ body[data-theme="dark"] .tree-item:hover {
     list-style-type: none;
     padding: 0;
     margin: 0;
-}
-
-.outline-item {
-    cursor: pointer;
-    padding: 3px 5px;
-    color: var(--text-color);
-    border-radius: 3px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    opacity: 0.8;
-}
-
-.outline-item:hover {
-    background-color: rgba(0, 0, 0, 0.05);
-    opacity: 1;
-}
-
-body[data-theme="dark"] .outline-item:hover {
-    background-color: rgba(255, 255, 255, 0.05);
-}
-
-.outline-item.active {
-    background-color: rgba(0, 122, 204, 0.2);
-    color: inherit;
-}
-
-.hidden-outline-item {
-    display: none;
+    /* エディタ同様のフォント設定を適用 */
+    font-family: inherit;
 }
 
 /* ========== Git Panel Styles (Updated) ========== */
@@ -1464,7 +1431,7 @@ body[data-theme="dark"] .cm-live-ol-marker {
     color: #58a6ff;
 }
 
-/* ★★★ Code Block Styles (Updated with Line Numbers) ★★★ */
+/* Code Block Styles (Updated with Line Numbers) */
 
 /* 共通設定 */
 .cm-code-block,
@@ -1950,36 +1917,6 @@ body[data-theme="dark"] .cm-language-item:hover {
 #shell-dropdown .dropdown-item:hover {
     background-color: #007acc;
     color: white;
-}
-
-/* PDF Preview */
-.pdf-preview-header {
-    padding: 0 10px;
-    background: #252526;
-    border-bottom: 1px solid #333;
-    height: 30px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
-    color: #ccc;
-}
-
-.pdf-preview-content {
-    flex: 1;
-    background-color: #525252;
-    overflow: auto;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 20px;
-}
-
-.pdf-page-canvas {
-    background-color: #fff;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
-    margin-bottom: 20px;
-    max-width: 100%;
 }
 
 /* ========== Resizers ========== */
@@ -4259,7 +4196,7 @@ body[data-theme="dark"] .cm-mermaid-preview {
     min-height: 1em;
 
     margin: 0;
-    /* ★重要: 外側の余白をなくす（ズレの原因） */
+    /* 外側の余白をなくす（ズレの原因） */
     padding: 10px 0;
     /* 代わりに内側に余白をつける */
 
@@ -5157,12 +5094,12 @@ body[data-theme="dark"] .custom-webview-content {
     /* ドットではなく、中央に一本の横線を表示 */
     /* transparent(透明) -> 線色(#999) -> transparent(透明) で線を表現 */
     background-image: linear-gradient(to bottom, transparent 48%, #999 48%, #999 52%, transparent 52%);
-    
+
     /* 修正: "1ch"単位ではなく、タブ文字全体の幅(100%)に合わせて背景を表示 */
     background-size: 100% 100%;
     background-repeat: no-repeat;
     background-position: center;
-    
+
     /* 線の濃さを調整 */
     opacity: 0.4;
 }
