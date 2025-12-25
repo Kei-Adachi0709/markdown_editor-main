@@ -1,5 +1,5 @@
 /**
- * Markdown IDE - Main Renderer Process
+ * Markdown Editor - Main Renderer Process
  * Integrated layout with full Markdown functionality (CodeMirror 6) and Terminal Support
  * Update: Added Search functionality (Ctrl+F) with VS Code like styling
  * Update: Added drawSelection for persistent selection visibility
@@ -182,6 +182,7 @@ let activeEditorView = null;
 let activeCustomLinkId = null; // 現在表示中のカスタムリンクID
 let isPreviewMode = false; // プレビューモードの状態
 let splitLayoutRatio = 0.5; // エディタとプレビューの分割比率 (初期値50%)
+let commandPalette;
 
 // 言語状態を管理するフィールド
 const currentLanguageField = StateField.define({
@@ -512,9 +513,8 @@ function switchMainView(targetId) {
 // 透明度を適用する関数
 function applyWindowOpacity(transparency) {
     if (window.electronAPI && window.electronAPI.setWindowOpacity) {
-        // 透明度(0-90)を不透明度(1.0-0.1)に変換して送信
-        // 0% -> 1.0 (不透明), 90% -> 0.1 (透明)
-        const opacity = 1.0 - (transparency / 100);
+        const actualTransparency = transparency * 0.6;
+        const opacity = 1.0 - (actualTransparency / 100);
         window.electronAPI.setWindowOpacity(opacity);
     }
 }
@@ -1237,6 +1237,36 @@ async function convertMarkdownToHtml(markdown, pdfOptions, title) {
         };
     }
 
+    // --- チェックボックス（タスクリスト）のカスタムレンダリング ---
+    renderer.checkbox = function (checked) {
+        return '<input type="checkbox" ' + (checked ? 'checked="" ' : '') + 'disabled="" class="task-list-item-checkbox"> ';
+    };
+
+    // --- リストアイテムのカスタムレンダリング（タスクリスト用クラス付与） ---
+    renderer.listitem = function (text, task) {
+        if (task) {
+            return '<li class="task-list-item">' + text + '</li>\n';
+        }
+        return '<li>' + text + '</li>\n';
+    };
+
+    // --- Mermaidコードブロックの対応 ---
+    renderer.code = (code, language) => {
+        // 言語が mermaid の場合は専用のdivタグを返す
+        if (language === 'mermaid') {
+            return `<div class="mermaid">${code}</div>`;
+        }
+        // 通常のコードブロック（HTMLエスケープ処理）
+        // markedのデフォルト挙動に近い処理を再現
+        const escapedCode = (code || '').replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+
+        return `<pre><code class="language-${language || ''}">${escapedCode}</code></pre>`;
+    };
+
     // --- 画像のカスタムレンダラー (サイズ指定とパス解決) ---
     renderer.image = (href, title, text) => {
         // 1. サイズ指定の解析 ![alt|100](src) -> width="100"
@@ -1351,9 +1381,9 @@ function getLanguageExtensions(filePath) {
     return extensions;
 }
 
-const startDoc = `# Welcome to Markdown IDE
+const startDoc = `# Welcome to Markdown Editor
 
-高機能な統合Markdown編集環境へようこそ。
+Markdown編集環境へようこそ。
 このドキュメント自体がエディタの機能デモになっています。自由に編集して試してみてください。
 
 ## すぐに試せる機能
@@ -1391,7 +1421,7 @@ JS, Python, Bashなどのコードブロックには「▶ Run」ボタンが表
 
 \`\`\`javascript
 // 右上の「▶ Run」ボタンを押してみてください
-const greeting = "Hello, Markdown IDE!";
+const greeting = "Hello, Markdown Editor!";
 console.log(greeting);
 console.log("現在時刻: " + new Date().toLocaleString());
 \`\`\`
@@ -3825,10 +3855,24 @@ async function executePdfExport() {
 
     try {
         // オプション取得
-        const options = appSettings.pdfOptions || {
-            pageSize: 'A4', marginsType: 0, printBackground: true,
-            displayHeaderFooter: false, landscape: false, enableToc: false, includeTitle: false
+        const options = {
+            ...(appSettings.pdfOptions || {}),
+            // デフォルト値の補完（既存の設定があればそれを優先）
+            pageSize: appSettings.pdfOptions?.pageSize || 'A4',
+            marginsType: appSettings.pdfOptions?.marginsType !== undefined ? parseInt(appSettings.pdfOptions.marginsType) : 0,
+            printBackground: appSettings.pdfOptions?.printBackground !== undefined ? appSettings.pdfOptions.printBackground : true,
+            displayHeaderFooter: appSettings.pdfOptions?.displayHeaderFooter || false,
+            landscape: appSettings.pdfOptions?.landscape || false,
+            enableToc: appSettings.pdfOptions?.enableToc || false,
+            includeTitle: appSettings.pdfOptions?.includeTitle || false,
+            // 【重要】現在のテーマを渡してCSS変数を正しく解決させる
+            theme: appSettings.theme
         };
+
+        // カスタムCSSを取得してオプションに追加（スニペット用）
+        if (typeof getActiveCssContent === 'function') {
+            options.customCss = getActiveCssContent();
+        }
 
         // タイトルの取得
         const currentTitle = document.getElementById('file-title-input')?.value || 'Untitled';
@@ -8133,7 +8177,7 @@ if (projectSearchClearBtn) {
 
 // window load イベントリスナー全文 (setupTabReordering呼び出しを追加)
 window.addEventListener('load', async () => {
-    console.log('Markdown IDE loaded');
+    console.log('Markdown Editor loaded');
 
     await loadSettings();
     await loadRecentFiles();
@@ -8314,6 +8358,31 @@ window.addEventListener('load', async () => {
             toggleHighlightColor(globalEditorView, command.color);
         }
     });
+
+    if (typeof CommandPalette !== 'undefined') {
+        commandPalette = new CommandPalette();
+    }
+
+    // スニペット設定イベントもここで呼ぶ
+    setupSnippetSettingsEvents();
+
+    // すべての初期化が終わったらローディング画面を消す
+    const overlay = document.getElementById('loading-overlay');
+    if (overlay) {
+        // テーマに合わせて背景色を調整（ちらつき防止）
+        if (appSettings.theme === 'dark') {
+            overlay.style.backgroundColor = '#1e1e1e';
+            overlay.style.color = '#ccc';
+        }
+
+        // 少し待ってからフェードアウト（初期描画の安定待ち）
+        setTimeout(() => {
+            overlay.style.opacity = '0';
+            setTimeout(() => {
+                overlay.remove();
+            }, 300); // transition: opacity 0.3s に合わせる
+        }, 100);
+    }
 });
 
 // ブランチ切り替え機能のセットアップ (サイドバー & ステータスバー)
@@ -8778,33 +8847,73 @@ async function renderMediaContent(filePath, type) {
         // 表示中でなければ無視
         if (container.classList.contains('hidden') || container.style.display === 'none') return;
 
-        if (e.ctrlKey) {
-            // 画像操作
-            if (type === 'image') {
-                if (e.key === ';') {
-                    e.preventDefault(); e.stopPropagation();
-                    zoom(0.1);
-                } else if (e.key === '-') {
-                    e.preventDefault(); e.stopPropagation();
-                    zoom(-0.1);
-                } else if (e.key === '0' && !e.altKey) {
-                    e.preventDefault(); e.stopPropagation();
-                    state.scale = 1; state.pannedX = 0; state.pannedY = 0;
-                    updateTransform();
-                }
-            }
+        // キーバインド判定用ヘルパー関数
+        const matchesCommand = (commandId) => {
+            const bindings = getKeybindingsForCommand(commandId); // ['Mod-;', 'Mod-='] などを取得
+            const isMac = navigator.platform.toUpperCase().includes('MAC');
 
-            // PDF/画像共通: エディタ設定への干渉ブロック
-            // (PDF表示中も Ctrl+; 等で裏のエディタ設定が変わらないようにする)
-            if (['-', ';'].includes(e.key)) {
-                e.preventDefault();
-                e.stopPropagation();
+            return bindings.some(binding => {
+                const parts = binding.split('-');
+                let keyName = parts.pop();
+                // 'Mod--' のように末尾がハイフンの場合、splitの結果末尾が空文字になるため補正する
+                if (keyName === '') {
+                    keyName = '-';
+                    // もし配列にまだ空文字が残っていれば整理（必須ではないが安全のため）
+                    if (parts.length > 0 && parts[parts.length - 1] === '') {
+                        parts.pop();
+                    }
+                }
+
+                keyName = keyName.toLowerCase();
+
+                const reqShift = parts.includes('Shift');
+                const reqAlt = parts.includes('Alt');
+                const reqCtrl = parts.includes('Ctrl');
+                const reqMeta = parts.includes('Meta');
+                const reqMod = parts.includes('Mod');
+
+                // Shift & Alt の判定
+                if (e.shiftKey !== reqShift) return false;
+                if (e.altKey !== reqAlt) return false;
+
+                // Mod (Mac:Cmd, Win:Ctrl) の解決
+                const effectiveCtrl = reqCtrl || (reqMod && !isMac);
+                const effectiveMeta = reqMeta || (reqMod && isMac);
+
+                // Ctrl & Meta の判定 (厳密にチェック)
+                if (e.ctrlKey !== effectiveCtrl) return false;
+                if (e.metaKey !== effectiveMeta) return false;
+
+                // キーコードの判定
+                return e.key.toLowerCase() === keyName;
+            });
+        };
+
+        // 画像操作
+        if (type === 'image') {
+            if (matchesCommand('view:font-zoom-in')) {
+                e.preventDefault(); e.stopPropagation();
+                zoom(0.1);
+                return;
+            } else if (matchesCommand('view:font-zoom-out')) {
+                e.preventDefault(); e.stopPropagation();
+                zoom(-0.1);
+                return;
+            } else if (matchesCommand('view:font-zoom-reset')) {
+                e.preventDefault(); e.stopPropagation();
+                state.scale = 1; state.pannedX = 0; state.pannedY = 0;
+                updateTransform();
+                return;
             }
-            // リセットキーのブロック (Ctrl+0)
-            if (e.key === '0' && !e.altKey) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
+        }
+
+        // PDF/画像共通: エディタ設定への干渉ブロック
+        // (PDF表示中もズームショートカット等で裏のエディタ設定が変わらないようにする)
+        if (matchesCommand('view:font-zoom-in') ||
+            matchesCommand('view:font-zoom-out') ||
+            matchesCommand('view:font-zoom-reset')) {
+            e.preventDefault();
+            e.stopPropagation();
         }
     };
 
@@ -9498,7 +9607,7 @@ function switchToFile(filePath, targetPane = 'left') {
     updateFileTitleBars();
 
     if (fileData) {
-        document.title = `${fileData.fileName} - Markdown IDE`;
+        document.title = `${fileData.fileName} - Markdown Editor`;
     }
 
     updateOutline();
@@ -12172,14 +12281,6 @@ function setupSettingsActivationHandler() {
         }
     });
 }
-
-// インスタンス作成
-let commandPalette;
-window.addEventListener('load', () => {
-    // ... 既存のloadイベント内 ...
-    commandPalette = new CommandPalette();
-    setupSnippetSettingsEvents();
-});
 
 // ショートカットキー登録 (Ctrl+Shift+P)
 COMMANDS_REGISTRY.push({
