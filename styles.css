@@ -3723,33 +3723,6 @@ body[data-theme="dark"] .hotkey-action-btn:hover {
     opacity: 0.7;
 }
 
-/* ========== Calendar Styles ========== */
-.calendar-header {
-    padding: 0 10px;
-    background: #252526;
-    border-bottom: 1px solid #333;
-    height: 30px;
-    display: flex;
-    align-items: center;
-    font-size: 12px;
-    color: #ccc;
-    flex-shrink: 0;
-}
-
-.calendar-content {
-    flex: 1;
-    overflow: hidden;
-    background-color: #fff;
-    /* カレンダー背景 */
-    display: flex;
-    flex-direction: column;
-}
-
-/* ダークモード時のボーダー調整（iframeの中身はGoogle依存なので完全対応不可） */
-body[data-theme="dark"] .calendar-content {
-    background-color: #1e1e1e;
-}
-
 /* CodeMirror の改ページ、カード、水平線などのバッファ要素を非表示にする */
 .ͼ1 .cm-widgetBuffer {
     display: none;
@@ -5326,5 +5299,36 @@ body[data-theme="dark"] .markdown-rendered mark {
     display: flex;
     justify-content: center;
     margin: 1.5em 0;
-    background-color: transparent; /* 背景色を透明に */
+    background-color: transparent;
+    /* 背景色を透明に */
+}
+
+/* 引数入力欄のスタイル */
+.run-args-input {
+    display: none; /* 初期状態はJSで制御 */
+    width: 120px;
+    height: 24px;
+    font-size: 12px;
+    margin-right: 8px;
+    padding: 0 8px;
+    background-color: var(--input-bg);
+    color: var(--main-fg);
+    border: 1px solid var(--sidebar-border);
+    border-radius: 4px;
+    outline: none;
+    transition: all 0.2s ease;
+    font-family: 'Consolas', 'Monaco', monospace; /* 引数なので等幅フォント推奨 */
+    align-self: center;
+}
+
+/* フォーカス時の強調表示 */
+.run-args-input:focus {
+    border-color: var(--accent-color);
+    background-color: var(--main-bg);
+}
+
+/* プレースホルダーの色調整 */
+.run-args-input::placeholder {
+    color: var(--sidebar-fg);
+    opacity: 0.7;
 }
