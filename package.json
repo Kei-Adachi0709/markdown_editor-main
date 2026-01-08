@@ -44,13 +44,6 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true
     },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "kei-adachi0709",
-        "repo": "markdown_editor-main"
-      }
-    ],
     "files": [
       "**/*",
       "!**/.env",
