@@ -34,6 +34,9 @@
         "nsis"
       ],
       "icon": "icon.ico",
+      "publish": [
+        "github"
+      ],
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "nsis": {
