@@ -11,7 +11,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/umaru-channn/markdown_editor.git"
+    "url": "https://github.com/Kei-Adachi0709/markdown_editor-main.git"
   },
   "keywords": [
     "Electron",
@@ -47,8 +47,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "umaru-channn",
-        "repo": "markdown_editor"
+        "owner": "kei-adachi0709",
+        "repo": "markdown_editor-main"
       }
     ],
     "files": [
