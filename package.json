@@ -25,6 +25,10 @@
   "build": {
     "appId": "com.example.markdown-editor",
     "productName": "MarkdownEditor",
+    "mac": {
+      "target": "dmg",
+      "icon": "icon.ico"
+    },
     "win": {
       "target": [
         "nsis"
