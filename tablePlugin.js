@@ -487,7 +487,6 @@ const TableComponent = ({ initialData, initialWidths, onUpdate, onRender }) => {
 
     // 最新の状態をイベントリスナー内で参照するためのRef
     const stateRef = useRef({ data, widths, selection, isEditing });
-    // 状態更新のたびにRefも更新する
     useEffect(() => {
         stateRef.current = { data, widths, selection, isEditing };
     }, [data, widths, selection, isEditing]);
@@ -495,95 +494,158 @@ const TableComponent = ({ initialData, initialWidths, onUpdate, onRender }) => {
     const lastDeletePressRef = useRef(0);
     const tableRef = useRef(null);
 
-    // --- DOM Event Listeners (Native) ---
-    // PreactのイベントだとCodeMirrorに握りつぶされる可能性があるため、直接addEventListenerする
+    // --- Global Key & Copy/Paste Handling (Capture Phase) ---
     useEffect(() => {
-        const el = tableRef.current;
-        if (!el) return;
-
-        const onNativeCopy = (e) => {
+        const handleCaptureKeyDown = (e) => {
             const { selection, isEditing, data } = stateRef.current;
+
+            // 文字入力中、またはテーブル選択がない場合は標準動作に任せる
             if (isEditing || !selection) return;
 
-            e.preventDefault();
-            e.stopPropagation();
+            // --- Copy (Ctrl+C / Cmd+C) ---
+            if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+                e.preventDefault();
+                e.stopPropagation();
 
-            const { minR, maxR, minC, maxC } = getNormalizedSelection(selection);
-            
-            // 1. Markdown形式の作成
-            const mdRows = [];
-            // 2. HTML形式の作成（Excel互換用）
-            let htmlTable = '<table border="1">';
+                const { minR, maxR, minC, maxC } = getNormalizedSelection(selection);
+                
+                // 1. Markdown形式 (text/plain)
+                const mdRows = [];
+                // 2. HTML形式 (text/html) - Excel等用
+                let htmlTable = '<table border="1">';
 
-            for (let r = minR; r <= maxR; r++) {
-                const rowCells = [];
-                htmlTable += '<tr>';
-                for (let c = minC; c <= maxC; c++) {
-                    let val = "";
-                    if (r === -1) val = data.headers[c];
-                    else if (data.rows[r] && data.rows[r][c] !== undefined) val = data.rows[r][c];
+                // 選択範囲だけをループ処理
+                for (let r = minR; r <= maxR; r++) {
+                    const rowCells = [];
+                    htmlTable += '<tr>';
                     
-                    rowCells.push(val);
-                    htmlTable += `<td>${val}</td>`;
-                }
-                htmlTable += '</tr>';
+                    for (let c = minC; c <= maxC; c++) {
+                        let val = "";
+                        // 行インデックスが -1 ならヘッダー、それ以外ならデータ行
+                        if (r === -1) {
+                            val = data.headers[c] || "";
+                        } else if (data.rows[r] && data.rows[r][c] !== undefined) {
+                            val = data.rows[r][c];
+                        }
+                        
+                        rowCells.push(val);
+                        htmlTable += `<td>${val}</td>`;
+                    }
+                    htmlTable += '</tr>';
 
-                // Markdownの行を作成: | val | val |
-                mdRows.push("| " + rowCells.join(" | ") + " |");
-            }
-            htmlTable += '</table>';
-            
-            // ヘッダーが含まれていて、かつデータ行もある場合はセパレーターを入れる（プレビューでの表示崩れ防止）
-            if (minR === -1 && maxR >= 0) {
+                    // Markdown行: | val | val |
+                    mdRows.push("| " + rowCells.join(" | ") + " |");
+                }
+                htmlTable += '</table>';
+                
+                // --- セパレーター挿入ロジック (ユーザー提案) ---
                 const cols = maxC - minC + 1;
                 const separator = "| " + Array(cols).fill("---").join(" | ") + " |";
-                mdRows.splice(1, 0, separator);
+                
+                if (minR === -1) {
+                    // ケース1: ヘッダー行(1行目)が含まれている場合
+                    // Markdownの仕様上、ヘッダー行の直後にセパレーターが必要。
+                    // mdRows[0] がヘッダーなので、index 1 に挿入する。
+                    mdRows.splice(1, 0, separator);
+                } else {
+                    // ケース2: ヘッダー行が含まれない（データ行のみ）場合
+                    // コピーした範囲の一番若い行（n行目 = mdRows[0]）を擬似ヘッダーとし、
+                    // その直下（n行目とn+1行目の間 = index 1）にセパレーターを挿入する。
+                    mdRows.splice(1, 0, separator);
+                }
+
+                const mdText = mdRows.join("\n");
+
+                // ElectronのClipboard APIを使用して書き込む
+                try {
+                    const { clipboard } = require('electron');
+                    clipboard.write({
+                        text: mdText,
+                        html: htmlTable
+                    });
+                    console.log("Table copied (Formatted)");
+                } catch (err) {
+                    console.warn("Electron clipboard failed, using navigator", err);
+                    navigator.clipboard.writeText(mdText);
+                }
+                return;
             }
 
-            const mdText = mdRows.join("\n");
-
-            // クリップボードにセット
-            if (e.clipboardData) {
-                e.clipboardData.setData('text/plain', mdText);
-                e.clipboardData.setData('text/html', htmlTable);
-                console.log("Copied via Native Event:", mdText); // 動作確認用ログ
+            // --- Paste (Ctrl+V / Cmd+V) ---
+            if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                navigator.clipboard.readText()
+                    .then(text => applyPasteData(text))
+                    .catch(err => console.error('Failed to read clipboard:', err));
             }
         };
 
-        const onNativePaste = (e) => {
-            const { isEditing, selection } = stateRef.current;
-            if (isEditing || !selection) return;
-
-            e.preventDefault();
-            e.stopPropagation();
-
-            const clipboardText = e.clipboardData.getData("text/plain");
-            if (clipboardText) {
-                applyPasteData(clipboardText);
-            }
-        };
-
-        const onNativeKeyDown = (e) => {
-            // PreactのonKeyDownが発火しない場合の保険
-            // 基本的なナビゲーションなどはPreact側に任せつつ、コピーだけは念入りにチェック
-            if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-                // native copyイベントが発火するはずなのでここでは何もしないが、
-                // もし発火しない環境ならここで強制的に処理を書くことも可能。
-                // 現状はcopyイベントに任せる。
-            }
-        };
-
-        el.addEventListener('copy', onNativeCopy);
-        el.addEventListener('paste', onNativePaste);
-        el.addEventListener('keydown', onNativeKeyDown);
+        // useCapture: true でイベントを最優先で取得する
+        window.addEventListener('keydown', handleCaptureKeyDown, true);
 
         return () => {
-            el.removeEventListener('copy', onNativeCopy);
-            el.removeEventListener('paste', onNativePaste);
-            el.removeEventListener('keydown', onNativeKeyDown);
+            window.removeEventListener('keydown', handleCaptureKeyDown, true);
         };
-    }, []); // マウント時のみ設定（内部でrefを参照するのでdepsは空でOK）
+    }, []); 
 
+    // --- Key Down Handler (for Nav) ---
+    const handleKeyDown = (e) => {
+        if (isEditing) return;
+
+        // Copy/Pasteは上記の window.addEventListener で処理するのでここでは無視
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'v')) {
+            return; 
+        }
+
+        // Navigation
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+            e.preventDefault();
+            if (!selection) {
+                setSelection({ anchor: { r: -1, c: 0 }, head: { r: -1, c: 0 } });
+                return;
+            }
+            if (e.shiftKey) {
+                const { head } = selection;
+                let r = head.r;
+                let c = head.c;
+                const maxR = data.rows.length - 1;
+                const maxC = data.headers.length - 1;
+                if (e.key === 'ArrowUp') r--;
+                if (e.key === 'ArrowDown') r++;
+                if (e.key === 'ArrowLeft') c--;
+                if (e.key === 'ArrowRight') c++;
+                r = Math.max(-1, Math.min(r, maxR));
+                c = Math.max(0, Math.min(c, maxC));
+                setSelection(prev => ({ ...prev, head: { r, c } }));
+            } else {
+                if (e.key === 'ArrowUp') moveSelection(-1, 0);
+                if (e.key === 'ArrowDown') moveSelection(1, 0);
+                if (e.key === 'ArrowLeft') moveSelection(0, -1);
+                if (e.key === 'ArrowRight') moveSelection(0, 1);
+            }
+        }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            if (selection) handleNavigateRequest('enter');
+        }
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            e.preventDefault();
+            const now = Date.now();
+            const isDouble = (now - lastDeletePressRef.current) < 300;
+            lastDeletePressRef.current = now;
+            if (isDouble) {
+                const handled = deleteSelection();
+                if (!handled) clearContentSelection();
+            } else {
+                clearContentSelection();
+            }
+        }
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            handleEditStart();
+        }
+    };
 
     useEffect(() => { if (onRender) onRender(); });
 
@@ -643,9 +705,6 @@ const TableComponent = ({ initialData, initialWidths, onUpdate, onRender }) => {
         }
     }, [selection, isEditing]);
 
-    // --- Logic Helpers ---
-
-    // リスナー内でも使えるように純粋関数として分離、もしくはRef経由で呼ぶためここで定義
     const getNormalizedSelection = (sel = selection) => {
         if (!sel) return { minR: 0, maxR: -1, minC: 0, maxC: -1 };
         const { anchor, head } = sel;
@@ -1038,57 +1097,6 @@ const TableComponent = ({ initialData, initialWidths, onUpdate, onRender }) => {
             setData(newData);
             setWidths(newWidths);
             requestUpdate(newData, newWidths);
-        }
-    };
-
-    // --- Key Down Handler (for Nav) ---
-    const handleKeyDown = (e) => {
-        if (isEditing) return;
-        // Navigation
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-            e.preventDefault();
-            if (!selection) {
-                setSelection({ anchor: { r: -1, c: 0 }, head: { r: -1, c: 0 } });
-                return;
-            }
-            if (e.shiftKey) {
-                const { head } = selection;
-                let r = head.r;
-                let c = head.c;
-                const maxR = data.rows.length - 1;
-                const maxC = data.headers.length - 1;
-                if (e.key === 'ArrowUp') r--;
-                if (e.key === 'ArrowDown') r++;
-                if (e.key === 'ArrowLeft') c--;
-                if (e.key === 'ArrowRight') c++;
-                r = Math.max(-1, Math.min(r, maxR));
-                c = Math.max(0, Math.min(c, maxC));
-                setSelection(prev => ({ ...prev, head: { r, c } }));
-            } else {
-                if (e.key === 'ArrowUp') moveSelection(-1, 0);
-                if (e.key === 'ArrowDown') moveSelection(1, 0);
-                if (e.key === 'ArrowLeft') moveSelection(0, -1);
-                if (e.key === 'ArrowRight') moveSelection(0, 1);
-            }
-        }
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            if (selection) handleNavigateRequest('enter');
-        }
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-            e.preventDefault();
-            const now = Date.now();
-            const isDouble = (now - lastDeletePressRef.current) < 300;
-            lastDeletePressRef.current = now;
-            if (isDouble) {
-                const handled = deleteSelection();
-                if (!handled) clearContentSelection();
-            } else {
-                clearContentSelection();
-            }
-        }
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            handleEditStart();
         }
     };
 
