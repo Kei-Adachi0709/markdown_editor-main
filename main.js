@@ -2883,6 +2883,15 @@ function getPdfHtmlTemplate(htmlContent, options = {}) {
           overflow: visible;
         }
         
+        /* 改ページ設定 */
+        .page-break {
+            page-break-after: always;
+            break-after: page;
+            height: 0;
+            display: block;
+            visibility: hidden;
+        }
+
         /* Mermaid調整 */
         .mermaid {
           display: flex;
