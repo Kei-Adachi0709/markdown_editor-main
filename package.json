@@ -27,7 +27,7 @@
     "productName": "MarkdownEditor",
     "mac": {
       "target": "dmg",
-      "icon": "icon.ico"
+      "icon": "icon.png"
     },
     "win": {
       "target": [
