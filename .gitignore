@@ -4,3 +4,38 @@ node_modules
 secrets.js
 dist
 git_memo.md
+# --- Microsoft Office Files (Binary) ---
+# Word
+*.doc
+*.docx
+*.docm
+*.dot
+*.dotx
+*.dotm
+
+# Excel
+*.xls
+*.xlsx
+*.xlsm
+*.xlt
+*.xltx
+*.xltm
+*.csv
+
+# PowerPoint
+*.ppt
+*.pptx
+*.pptm
+*.pot
+*.potx
+*.potm
+*.pps
+*.ppsx
+*.ppsm
+
+# Access
+*.accdb
+*.mdb
+
+# OneNote
+*.onego
