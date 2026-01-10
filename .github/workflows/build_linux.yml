@@ -2,12 +2,16 @@ name: Build Linux App
 
 on:
   push:
-    branches: [ "main", "master" ]
+    tags:
+      - 'v*' # "v1.0.0" などのタグがpushされた時に実行
   workflow_dispatch:
+
+permissions:
+  contents: write # リリースを作成するために必要
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest  # Linux環境で実行
+    runs-on: ubuntu-latest
 
     steps:
       - name: Check out Git repository
@@ -22,15 +26,17 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Build for Linux
-        # --linux オプションを渡してビルドします
-        run: npm run build -- --linux -p never
+      - name: Build and Publish for Linux
+        # --linux オプションを渡し、-p always でGitHub Releasesへ公開
+        run: npm run build -- --linux -p always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Artifacts
+      - name: Upload Artifacts (Optional)
+        # GitHub Actionsの実行結果画面にもアーティファクトを残す設定（不要なら削除可）
         uses: actions/upload-artifact@v4
         with:
           name: Linux-App
-          # package.jsonの設定に基づき、AppImageやdebファイルが生成されます
           path: |
             dist/*.AppImage
             dist/*.deb
