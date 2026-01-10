@@ -27,7 +27,11 @@
     "productName": "MarkdownEditor",
     "mac": {
       "target": "dmg",
-      "icon": "icon.png"
+      "icon": "icon.png",
+      "publish": [        
+        "github"
+      ],
+      "artifactName": "${productName}-${version}-mac.${ext}"
     },
     "win": {
       "target": [
