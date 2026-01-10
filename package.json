@@ -39,6 +39,18 @@
       ],
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "icon.png",
+      "category": "Development",
+      "artifactName": "${productName}-${version}-linux.${ext}",
+      "publish": [
+        "github"
+      ]
+    }
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
