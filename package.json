@@ -50,7 +50,7 @@
       "publish": [
         "github"
       ]
-    }
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
