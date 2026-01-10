@@ -20,7 +20,7 @@
     "Terminal",
     "LivePreview"
   ],
-  "author": "GitHub",
+  "author": "Kei Adachi <kei-adachi@example.com>",
   "license": "CC0-1.0",
   "build": {
     "appId": "com.example.markdown-editor",
