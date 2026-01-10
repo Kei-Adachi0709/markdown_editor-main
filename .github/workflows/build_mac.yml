@@ -22,9 +22,13 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Build for macOS
-        # package.jsonに "mac": { "target": "dmg" } があるのでこれでOK
-        run: npm run build -- --mac -p never
+      # ... (on: 部分や permissions: はLinuxと同じ)
+
+      - name: Build and Publish for macOS
+        # "-p never" を削除
+        run: npm run build -- --mac -p always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
