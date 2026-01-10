@@ -1,0 +1,36 @@
+name: Build Linux App
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest  # Linux環境で実行
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build for Linux
+        # --linux オプションを渡してビルドします
+        run: npm run build -- --linux -p never
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Linux-App
+          # package.jsonの設定に基づき、AppImageやdebファイルが生成されます
+          path: |
+            dist/*.AppImage
+            dist/*.deb
